@@ -1,0 +1,196 @@
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"github.com/go-resty/resty/v2"
+)
+
+// RingCentral credentials
+const (
+	ringCentralClientID     = "YOUR_RINGCENTRAL_CLIENT_ID"
+	ringCentralClientSecret = "YOUR_RINGCENTRAL_CLIENT_SECRET"
+	ringCentralUsername     = "YOUR_RINGCENTRAL_USERNAME"
+	ringCentralPassword     = "YOUR_RINGCENTRAL_PASSWORD"
+	ringCentralAuthURL      = "https://platform.ringcentral.com/restapi/oauth/token"
+	ringCentralAPIBaseURL   = "https://platform.ringcentral.com/restapi/v1.0"
+)
+
+// Dialpad credentials
+const (
+	dialpadClientID     = "YOUR_DIALPAD_CLIENT_ID"
+	dialpadClientSecret = "YOUR_DIALPAD_CLIENT_SECRET"
+	dialpadAuthURL      = "https://dialpad.com/oauth2/token"
+	dialpadAPIBaseURL   = "https://dialpad.com/api/v2"
+)
+
+type RingCentralTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+	Scope       string `json:"scope"`
+}
+
+type DialpadTokenResponse struct {
+	AccessToken string `json:"access_token"`
+	TokenType   string `json:"token_type"`
+	ExpiresIn   int    `json:"expires_in"`
+	Scope       string `json:"scope"`
+}
+
+func authenticateToRingCentral() (string, error) {
+	client := resty.New()
+
+	resp, err := client.R().
+		SetBasicAuth(ringCentralClientID, ringCentralClientSecret).
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetFormData(map[string]string{
+			"grant_type": "password",
+			"username":   ringCentralUsername,
+			"password":   ringCentralPassword,
+		}).
+		Post(ringCentralAuthURL)
+
+	if err != nil {
+		return "", err
+	}
+
+	var tokenResponse RingCentralTokenResponse
+	err = json.Unmarshal(resp.Body(), &tokenResponse)
+	if err != nil {
+		return "", err
+	}
+
+	return tokenResponse.AccessToken, nil
+}
+
+func authenticateToDialpad() (string, error) {
+	client := resty.New()
+
+	resp, err := client.R().
+		SetBasicAuth(dialpadClientID, dialpadClientSecret).
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetFormData(map[string]string{
+			"grant_type": "client_credentials",
+		}).
+		Post(dialpadAuthURL)
+
+	if err != nil {
+		return "", err
+	}
+
+	var tokenResponse DialpadTokenResponse
+	err = json.Unmarshal(resp.Body(), &tokenResponse)
+	if err != nil {
+		return "", err
+	}
+
+	return tokenResponse.AccessToken, nil
+}
+
+// RingCentral API details
+const (
+	ringCentralAPIBaseURL = "https://platform.devtest.ringcentral.com/scim/v2"
+)
+
+// Dialpad API details
+const (
+	dialpadAPIBaseURL = "https://dialpad.com/api/v2"
+)
+
+// RingCentralUser represents the user structure from RingCentral API
+type RingCentralUser struct {
+	ID        string `json:"id"`
+	FamilyName string `json:"familyName"`
+	GivenName  string `json:"givenName"`
+	Email      string `json:"emails"`
+}
+
+// DialpadUser represents the user structure for Dialpad API
+type DialpadUser struct {
+	AutoAssign bool   `json:"auto_assign"`
+	Email      string `json:"email"`
+	FirstName  string `json:"first"`
+	LastName   string `json:"last_name"`
+	License    string `json:"license"`
+	OfficeID   *int   `json:"office_id"`
+}
+
+// Response structure from RingCentral API
+type RingCentralResponse struct {
+	Resources []RingCentralUser `json:"Resources"`
+}
+
+// Function to get users from RingCentral
+func getUsersFromRingCentral(accessToken string) ([]RingCentralUser, error) {
+	client := resty.New()
+
+	resp, err := client.R().
+		SetHeader("Authorization", "Bearer "+accessToken).
+		SetHeader("Accept", "application/json").
+		Get(ringCentralAPIBaseURL + "/Users")
+
+	if err != nil {
+		return nil, err
+	}
+
+	var ringCentralResponse RingCentralResponse
+	err = json.Unmarshal(resp.Body(), &ringCentralResponse)
+	if err != nil {
+		return nil, err
+	}
+
+	return ringCentralResponse.Resources, nil
+}
+
+// Function to create a user in Dialpad
+func createUserInDialpad(accessToken string, user DialpadUser) error {
+	client := resty.New()
+
+	resp, err := client.R().
+		SetHeader("Authorization", "Bearer "+accessToken).
+		SetHeader("Content-Type", "application/json").
+		SetBody(user).
+		Post(dialpadAPIBaseURL + "/users")
+
+	if err != nil {
+		return err
+	}
+
+	if resp.StatusCode() != 201 {
+		return fmt.Errorf("failed to create user: %s", resp.String())
+	}
+
+	return nil
+}
+
+func main() {
+	ringCentralToken := "YOUR_RINGCENTRAL_ACCESS_TOKEN"
+	dialpadToken := "YOUR_DIALPAD_ACCESS_TOKEN"
+
+	users, err := getUsersFromRingCentral(ringCentralToken)
+	if err != nil {
+		log.Fatalf("Error getting users from RingCentral: %v", err)
+	}
+
+	for _, rcUser := range users {
+		dialpadUser := DialpadUser{
+			AutoAssign: false,
+			Email:      rcUser.Email,
+			FirstName:  rcUser.GivenName,
+			LastName:   rcUser.FamilyName,
+			License:    "Agent",
+			OfficeID:   nil,
+		}
+
+		err := createUserInDialpad(dialpadToken, dialpadUser)
+		if err != nil {
+			log.Printf("Error creating user in Dialpad: %v", err)
+		} else {
+			fmt.Printf("Successfully created user: %s %s\n", rcUser.GivenName, rcUser.FamilyName)
+		}
+	}
+}
